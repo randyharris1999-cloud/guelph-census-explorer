@@ -33,23 +33,6 @@ A sister app to [15-Minute Guelph](https://github.com/randyharris1999-cloud/15-M
 | `scripts/desktop.src.html`, `scripts/mobile.src.html` | Layout and styles for each version |
 | `scripts/build_html.py` | Combines each layout with `app.js` and the Leaflet stylesheet to write `index.html` and `mobile.html` |
 
-## Publishing
-
-Upload the folder to a new GitHub repository and turn on GitHub Pages (Settings → Pages → Deploy from branch → `main`, root). No Cloudflare relay is needed: the app has no live feeds.
-
-To test locally, run `python -m http.server 8000` in the folder and open http://localhost:8000. Opening `index.html` directly from disk won't load the data.
-
-## Rebuilding
-
-1. Cut Guelph out of the Ontario Census Profile (`98-401-X2021006_English_CSV_data_Ontario.csv`, 8.8 GB) into `Guelph_DA_census_full.csv`: every characteristic for Guelph's 220 DAs and the City of Guelph census subdivision (DGUID `2021A00053523008`). Use the starting-row file to jump close to line 29,162,006, then keep rows whose DGUID is in `Guelph_DA_2021.geojson`.
-2. Build the data and the page:
-
-```
-python scripts/build_explorer.py "<City of Guelph Data>/Census 2021" ../15-minute-guelph/data/ data/
-python scripts/build_html.py
-```
-
-To add a measure, add one line to the `M` list in `build_explorer.py` with its Census Profile characteristic IDs. The app picks it up automatically.
 
 ## Data
 
