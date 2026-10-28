@@ -6,6 +6,11 @@
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>
 <title>Guelph Census Explorer</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<script>
+// Phones get the mobile version unless the visitor chose the desktop one.
+(function () { var pref = null; try { pref = localStorage.getItem("gce-view"); } catch (e) {}
+  if (pref !== "desktop" && window.matchMedia && matchMedia("(max-width: 760px)").matches) location.replace("mobile.html" + location.hash); })();
+</script>
 <meta name="description" content="Explore the 2021 Census across Guelph's 201 neighbourhoods: map any measure, compare two neighbourhoods and see how measures relate.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&display=swap">
@@ -227,15 +232,21 @@ footer a{color:var(--accent-text)}
     <footer>
       <p>Neighbourhoods are Statistics Canada dissemination areas (DAs), each home to roughly 400 to 700 people. Each is named after the two streets with the most length inside it. Values marked n/a were suppressed by Statistics Canada to protect privacy.</p>
       <p>Incomes are for the 2020 calendar year, when pandemic benefits raised some low incomes. City figures are Statistics Canada's own figures for the City of Guelph. Most measures past population and age come from the 25% long-form sample, so small neighbourhoods can swing a lot. Work figures describe May 2021, during the pandemic.</p>
-      <p>Data: Statistics Canada, 2021 Census of Population (Statistics Canada Open Licence). Map: City of Guelph Open Data. The 15-minute score comes from <a href="https://randyharris1999-cloud.github.io/15-Minute-Guelph/" target="_blank" rel="noopener">15-Minute Guelph</a>. An independent project, not an official City of Guelph service. Created by Randy Harris.</p>
+      <p>Data: Statistics Canada, 2021 Census of Population (Statistics Canada Open Licence). Map, addresses and city boundary: City of Guelph Open Data. The 15-minute score comes from <a href="https://randyharris1999-cloud.github.io/15-Minute-Guelph/" target="_blank" rel="noopener">15-Minute Guelph</a>. An independent project, not an official City of Guelph service. Created by Randy Harris.</p>
+      <p><a href="mobile.html" id="toMobile">Switch to the phone version</a></p>
     </footer>
   </aside>
 </div>
 
 <script src="leaflet.min.js"></script>
 <script>
-"use strict";
+window.UI = { onReady() { const t = document.getElementById("toMobile"); if (t) t.onclick = () => { try { localStorage.removeItem("gce-view"); } catch (e) {} }; } };
+</script>
+<script>"use strict";
 const $ = id => document.getElementById(id);
+// Layout hooks: desktop and mobile pages set window.UI = {update, onSelect, onAddress, onReady} as they need.
+const fitPad = () => (window.UI && window.UI.pad) ? window.UI.pad() : {padding:[40, 40]};
+const hook = (name, ...args) => { try { const f = window.UI && window.UI[name]; if (f) f(...args); } catch (e) { console.error(e); } };
 const lc = s => s.replace(/^[A-Z](?=[a-z])/, c => c.toLowerCase());
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -332,7 +343,7 @@ async function boot() {
   readTokens(); buildMap(); buildControls(); refresh(); $("loading").hidden = true;
   const start = D.das.find(a => a.streets[0] === "Wyndham St N") || D.das.find(a => a.pop > 0);
   select(start, {quiet:true});
-  loadAddresses();
+  loadAddresses(); hook("onReady");
 }
 let ADDR = null;
 async function loadAddresses() {
@@ -349,8 +360,9 @@ async function loadAddresses() {
 
 /* ---------- map ---------- */
 function buildMap() {
-  map = L.map("map", {zoomControl:true, minZoom:11, maxZoom:17, preferCanvas:true, attributionControl:true, zoomSnap:0.25});
-  map.attributionControl.setPrefix(false).addAttribution("Statistics Canada 2021 Census · City of Guelph Open Data");
+  const touch = !!(window.UI && window.UI.touch);
+  map = L.map("map", {zoomControl:!touch, minZoom:11, maxZoom:17, preferCanvas:true, attributionControl:!touch, zoomSnap:0.25});
+  if (!touch) map.attributionControl.setPrefix(false).addAttribution("Statistics Canada 2021 Census · City of Guelph Open Data");
   for (const [p, z] of [["da", 400], ["water", 410], ["roads", 420], ["bound", 425], ["sel", 430]]) { map.createPane(p).style.zIndex = z; if (p !== "da") map.getPane(p).style.pointerEvents = "none"; }
   const rend = p => L.canvas({pane:p, padding:0.3});
   const rDa = rend("da"), rW = rend("water"), rR = rend("roads"); selRend = L.svg({pane:"sel"});
@@ -359,7 +371,7 @@ function buildMap() {
     a.poly = L.polygon(a.rings.map(ll), {renderer:rDa, weight:0.6, fillOpacity:0.92, smoothFactor:0.5}).addTo(daLayer);
     a.poly.on("click", () => select(a));
     a.poly.on("mouseover", () => hover(a, true)).on("mouseout", () => hover(a, false));
-    a.poly.bindTooltip(() => tipHtml(a), {sticky:true, direction:"top", offset:[0, -10], className:"tip", opacity:1});
+    if (!touch) a.poly.bindTooltip(() => tipHtml(a), {sticky:true, direction:"top", offset:[0, -10], className:"tip", opacity:1});
   }
   D.waterL = D.water.map(([name, rings]) => L.polygon(rings.map(ll), {renderer:rW, weight:0.8, fillOpacity:1, interactive:false, smoothFactor:1}).addTo(map));
   D.roadL = [];
@@ -369,7 +381,7 @@ function buildMap() {
   D.maskL = L.polygon([[[60, -100], [60, -60], [30, -60], [30, -100]], ...city], {renderer:rB, stroke:false, fillOpacity:0.8, interactive:false}).addTo(map);
   D.boundL = L.polygon(city, {renderer:rB, fill:false, weight:2.4, interactive:false}).addTo(map);
   selLayer = L.layerGroup().addTo(map);
-  map.fitBounds(D.boundL.getBounds(), {padding:[10, 10]});
+  map.fitBounds(D.boundL.getBounds(), (window.UI && window.UI.pad) ? window.UI.pad(10) : {padding:[10, 10]});
   map.on("zoomend", styleRoads);
   styleBase();
   const obs = () => { readTokens(); styleBase(); paint(); drawSel(); };
@@ -461,7 +473,7 @@ function refresh() {
   const vals = D.das.map(a => a[S.measure]).filter(v => v != null);
   S.br = breaks(vals, S.method, S.k); S.cols = rampN(M.ramp, S.br.length - 1);
   D.das.forEach(a => { const v = a[S.measure]; a.cls = v == null ? -1 : classOf(S.br, v); });
-  paint(); renderLegend(); renderProfile(); drawScatter(); renderRanks(); drawSel();
+  paint(); renderLegend(); renderProfile(); drawScatter(); renderRanks(); drawSel(); hook("update");
 }
 function colorOf(a) { return a.cls < 0 ? tok.nodata : S.cols[a.cls]; }
 function paint() {
@@ -481,7 +493,7 @@ function renderLegend() {
   for (let i = k - 1; i >= 0; i--) rows.push(`<button data-c="${i}" aria-pressed="${S.cls === i}"><i style="background:${S.cols[i]}"></i><span class="rng">${M.fmt(br[i])} – ${M.fmt(br[i + 1])}</span><span class="bar"><span style="width:${100 * counts[i] / mx}%"></span></span><span class="n">${counts[i]}</span></button>`);
   if (nd) rows.push(`<button class="nd" disabled><i></i><span class="rng">Not reported</span><span></span><span class="n">${nd}</span></button>`);
   $("legend").innerHTML = rows.join("");
-  $("legend").querySelectorAll("button[data-c]").forEach(b => b.onclick = () => { const c = +b.dataset.c; S.cls = S.cls === c ? null : c; paint(); renderLegend(); drawScatter(); });
+  $("legend").querySelectorAll("button[data-c]").forEach(b => b.onclick = () => { const c = +b.dataset.c; S.cls = S.cls === c ? null : c; paint(); renderLegend(); drawScatter(); hook("update"); });
 }
 function pctRank(k, v) { const vals = D.das.map(a => a[k]).filter(x => x != null); return 100 * vals.filter(x => x < v).length / Math.max(1, vals.length - 1); }
 
@@ -490,13 +502,13 @@ function pickAddress(i) {
   S.addr = {text:ADDR.t[i], lat:ADDR.lat[i], lon:ADDR.lon[i], da:a};
   select(a, {keepAddr:true});
   map.flyTo([S.addr.lat, S.addr.lon], Math.max(map.getZoom(), 15.5), {duration:0.6});
-  if (matchMedia("(max-width: 860px)").matches) document.querySelector(".mapwrap").scrollIntoView({behavior:"smooth", block:"start"});
+  hook("onAddress", S.addr);
 }
 function select(a, o = {}) {
   if (!a) return;
   if (!o.keepAddr && S.addr && S.addr.da !== a) S.addr = null;
-  S.sel = a; drawSel(); renderProfile(); drawScatter();
-  if (o.zoom) map.flyToBounds(a.poly.getBounds(), {maxZoom:15.5, padding:[40, 40], duration:0.6});
+  S.sel = a; drawSel(); renderProfile(); drawScatter(); hook("update"); if (!o.quiet) hook("onSelect", a, o);
+  if (o.zoom) map.flyToBounds(a.poly.getBounds(), {maxZoom:15.5, duration:0.6, ...fitPad()});
 }
 function drawSel() {
   if (!selLayer) return; selLayer.clearLayers();
@@ -534,7 +546,7 @@ function renderProfile() {
   on("pin", () => { S.pin = S.pin === a ? null : a; renderProfile(); drawSel(); });
   on("unpin", () => { S.pin = null; renderProfile(); drawSel(); drawScatter(); });
   on("swap", () => { const t = S.pin; S.pin = S.sel; S.sel = t; renderProfile(); drawSel(); drawScatter(); });
-  on("zoomto", () => map.flyToBounds(a.poly.getBounds(), {maxZoom:15.5, padding:[40, 40], duration:0.6}));
+  on("zoomto", () => map.flyToBounds(a.poly.getBounds(), {maxZoom:15.5, duration:0.6, ...fitPad()}));
 }
 
 function niceTicks(lo, hi, n = 4) { const span = hi - lo || 1, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0)), r = step0 / mag, step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag; const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) t.push(+v.toFixed(10)); return t; }
