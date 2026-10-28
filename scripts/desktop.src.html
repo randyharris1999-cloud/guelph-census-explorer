@@ -17,6 +17,7 @@
   --accent:#00A6E5; --accent-ink:#06303F; --accent-text:#0079A8; --brand-green:#85B24A; --warn:#B4532A;
   --land:#E9EBE4; --water:#9FC6D6; --water-edge:#7FAFC2; --street:#FFFFFF; --case:#B9BEB4; --hwy:#F4D58D;
   --nodata:#D6D9D1; --halo:rgba(251,251,248,.94); --sel:#1C2A2D;
+  --bldg:rgba(28,42,45,.17); --bldg-edge:rgba(28,42,45,.32); --label:#3D4A4C;
   --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
   --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
@@ -25,12 +26,12 @@
   --bg:#101617; --panel:#151C1D; --ink:#E4EBE9; --muted:#97A5A4; --rule:#273133; --chip:#1E2729;
   --accent:#00A6E5; --accent-ink:#06232E; --accent-text:#3DC1F0; --brand-green:#85B24A; --warn:#E08A5F;
   --land:#172022; --water:#1F4E63; --water-edge:#2C6178; --street:#3A4749; --case:#0C1112; --hwy:#6B5A2E;
-  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; color-scheme:dark }}
+  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; --bldg:rgba(0,0,0,.34); --bldg-edge:rgba(0,0,0,.55); --label:#C9D3D2; color-scheme:dark }}
 :root[data-theme="dark"]{
   --bg:#101617; --panel:#151C1D; --ink:#E4EBE9; --muted:#97A5A4; --rule:#273133; --chip:#1E2729;
   --accent:#00A6E5; --accent-ink:#06232E; --accent-text:#3DC1F0; --brand-green:#85B24A; --warn:#E08A5F;
   --land:#172022; --water:#1F4E63; --water-edge:#2C6178; --street:#3A4749; --case:#0C1112; --hwy:#6B5A2E;
-  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; color-scheme:dark }
+  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; --bldg:rgba(0,0,0,.34); --bldg-edge:rgba(0,0,0,.55); --label:#C9D3D2; color-scheme:dark }
 
 html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45}
@@ -140,6 +141,8 @@ footer p{margin:0}
 footer a{color:var(--accent-text)}
 
 .leaflet-container{font-family:var(--f-body);background:var(--land)}
+.north{color:var(--ink);background:var(--halo);border:1px solid var(--rule);border-radius:50%;width:44px;height:44px;display:grid;place-items:center;box-shadow:0 1px 6px rgba(0,0,0,.12)}
+.north svg{display:block}
 .leaflet-tooltip.tip{background:var(--halo);color:var(--ink);border:1px solid var(--rule);box-shadow:0 2px 10px rgba(0,0,0,.15);border-radius:6px;padding:6px 8px;font-size:12px;line-height:1.35}
 .leaflet-tooltip.tip:before{display:none}
 .leaflet-tooltip.tip b{font-weight:600}

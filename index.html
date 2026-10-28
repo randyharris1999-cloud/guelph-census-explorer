@@ -24,6 +24,7 @@
   --accent:#00A6E5; --accent-ink:#06303F; --accent-text:#0079A8; --brand-green:#85B24A; --warn:#B4532A;
   --land:#E9EBE4; --water:#9FC6D6; --water-edge:#7FAFC2; --street:#FFFFFF; --case:#B9BEB4; --hwy:#F4D58D;
   --nodata:#D6D9D1; --halo:rgba(251,251,248,.94); --sel:#1C2A2D;
+  --bldg:rgba(28,42,45,.17); --bldg-edge:rgba(28,42,45,.32); --label:#3D4A4C;
   --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
   --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
@@ -32,12 +33,12 @@
   --bg:#101617; --panel:#151C1D; --ink:#E4EBE9; --muted:#97A5A4; --rule:#273133; --chip:#1E2729;
   --accent:#00A6E5; --accent-ink:#06232E; --accent-text:#3DC1F0; --brand-green:#85B24A; --warn:#E08A5F;
   --land:#172022; --water:#1F4E63; --water-edge:#2C6178; --street:#3A4749; --case:#0C1112; --hwy:#6B5A2E;
-  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; color-scheme:dark }}
+  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; --bldg:rgba(0,0,0,.34); --bldg-edge:rgba(0,0,0,.55); --label:#C9D3D2; color-scheme:dark }}
 :root[data-theme="dark"]{
   --bg:#101617; --panel:#151C1D; --ink:#E4EBE9; --muted:#97A5A4; --rule:#273133; --chip:#1E2729;
   --accent:#00A6E5; --accent-ink:#06232E; --accent-text:#3DC1F0; --brand-green:#85B24A; --warn:#E08A5F;
   --land:#172022; --water:#1F4E63; --water-edge:#2C6178; --street:#3A4749; --case:#0C1112; --hwy:#6B5A2E;
-  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; color-scheme:dark }
+  --nodata:#2A3335; --halo:rgba(21,28,29,.94); --sel:#FFFFFF; --bldg:rgba(0,0,0,.34); --bldg-edge:rgba(0,0,0,.55); --label:#C9D3D2; color-scheme:dark }
 
 html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45}
@@ -147,6 +148,8 @@ footer p{margin:0}
 footer a{color:var(--accent-text)}
 
 .leaflet-container{font-family:var(--f-body);background:var(--land)}
+.north{color:var(--ink);background:var(--halo);border:1px solid var(--rule);border-radius:50%;width:44px;height:44px;display:grid;place-items:center;box-shadow:0 1px 6px rgba(0,0,0,.12)}
+.north svg{display:block}
 .leaflet-tooltip.tip{background:var(--halo);color:var(--ink);border:1px solid var(--rule);box-shadow:0 2px 10px rgba(0,0,0,.15);border-radius:6px;padding:6px 8px;font-size:12px;line-height:1.35}
 .leaflet-tooltip.tip:before{display:none}
 .leaflet-tooltip.tip b{font-weight:600}
@@ -330,7 +333,7 @@ function rampN(stops, k) {
 
 /* ---------- data ---------- */
 let D, map, daLayer, selLayer, selRend, tok = {};
-const readTokens = () => { const cs = getComputedStyle(document.documentElement); for (const t of ["land","bg","water","water-edge","street","case","hwy","nodata","sel","panel","ink","accent","warn","muted"]) tok[t] = cs.getPropertyValue("--" + t).trim(); };
+const readTokens = () => { const cs = getComputedStyle(document.documentElement); for (const t of ["bldg","bldg-edge","label","halo","land","bg","water","water-edge","street","case","hwy","nodata","sel","panel","ink","accent","warn","muted"]) tok[t] = cs.getPropertyValue("--" + t).trim(); };
 const ll = fl => { const o = []; for (let j = 0; j < fl.length; j += 2) o.push([fl[j + 1] / 1e5, fl[j] / 1e5]); return o; };
 const daName = a => a.streets.length >= 2 ? a.streets[0] + " & " + a.streets[1] : a.streets[0] || ("DA " + a.da);
 
@@ -343,7 +346,73 @@ async function boot() {
   readTokens(); buildMap(); buildControls(); refresh(); $("loading").hidden = true;
   const start = D.das.find(a => a.streets[0] === "Wyndham St N") || D.das.find(a => a.pop > 0);
   select(start, {quiet:true});
-  loadAddresses(); hook("onReady");
+  loadAddresses(); loadContext(); hook("onReady");
+}
+const CTX = {};
+async function loadContext() {
+  try {
+    const r = await fetch("data/context.json"); if (!r.ok) throw new Error("context");
+    const C = await r.json();
+    const P = (lon, lat) => map.project(L.latLng(lat, lon), 0);
+    // buildings: zoom-0 pixel coordinates in the rotated projection, with boxes for culling
+    const n = C.b.length, off = new Int32Array(n + 1); let tot = 0;
+    for (let i = 0; i < n; i++) { tot += C.b[i].length / 2; off[i + 1] = tot; }
+    const bx = new Float64Array(tot), by = new Float64Array(tot), box = new Float64Array(n * 4);
+    for (let i = 0, k = 0; i < n; i++) { let x = 0, y = 0, a = Infinity, b = Infinity, c = -Infinity, d = -Infinity; const fl = C.b[i];
+      for (let j = 0; j < fl.length; j += 2, k++) { x += fl[j]; y += fl[j + 1]; const p = P(x / 1e5, y / 1e5); bx[k] = p.x; by[k] = p.y; if (p.x < a) a = p.x; if (p.x > c) c = p.x; if (p.y < b) b = p.y; if (p.y > d) d = p.y; }
+      box[i * 4] = a; box[i * 4 + 1] = b; box[i * 4 + 2] = c; box[i * 4 + 3] = d; }
+    // streets: local streets join the road layer; every named street can get a label
+    const dec = fl => { const o = []; let x = 0, y = 0; for (let j = 0; j < fl.length; j += 2) { x += fl[j]; y += fl[j + 1]; o.push([y / 1e5, x / 1e5]); } return o; };
+    const labels = [];
+    for (const [ni, cls, fl] of C.s) {
+      const pts = dec(fl);
+      if (cls === 1) D.roadL.push([1, L.polyline(pts, {renderer:D.rR, interactive:false, smoothFactor:1}).addTo(map)]);
+      labels.push({name:C.names[ni], cls, p:pts.map(q => map.project(L.latLng(q[0], q[1]), 0))});
+    }
+    labels.sort((a, b) => b.cls - a.cls || b.p.length - a.p.length);
+    styleRoads();
+    CTX.bl = new CanvasLayer((ctx, v) => drawBuildings(ctx, v, off, bx, by, box), "bldg").addTo(map);
+    CTX.lb = new CanvasLayer((ctx, v) => drawLabels(ctx, v, labels), "labels").addTo(map);
+  } catch (e) { console.error(e); }
+}
+function drawBuildings(ctx, v, off, bx, by, box) {
+  if (v.z < 14.5) return;
+  const n = off.length - 1, X0 = v.ox / v.k, Y0 = v.oy / v.k, X1 = (v.ox + v.w) / v.k, Y1 = (v.oy + v.h) / v.k;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    if (box[i * 4 + 2] < X0 || box[i * 4] > X1 || box[i * 4 + 3] < Y0 || box[i * 4 + 1] > Y1) continue;
+    for (let j = off[i]; j < off[i + 1]; j++) { const x = bx[j] * v.k - v.ox, y = by[j] * v.k - v.oy; if (j === off[i]) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+    ctx.closePath();
+  }
+  ctx.globalAlpha = Math.min(1, (v.z - 14.5) / 0.75 + 0.25);
+  ctx.fillStyle = tok.bldg; ctx.fill();
+  if (v.z >= 15.5) { ctx.strokeStyle = tok["bldg-edge"]; ctx.lineWidth = 0.7; ctx.stroke(); }
+}
+function drawLabels(ctx, v, labels) {
+  if (v.z < 13.25) return;
+  const minCls = v.z < 14.25 ? 3 : v.z < 15.25 ? 2 : 1, size = v.z >= 16 ? 12.5 : 11.5;
+  ctx.font = `600 ${size}px "Public Sans", system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.lineJoin = "round"; ctx.lineWidth = 3.2; ctx.strokeStyle = tok.halo; ctx.fillStyle = tok.label;
+  const placed = [], lastByName = new Map(), M = 20;
+  for (const lab of labels) {
+    if (lab.cls < minCls) continue;
+    const pts = lab.p.map(p => [p.x * v.k - v.ox, p.y * v.k - v.oy]);
+    let len = 0; const seg = [];
+    for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); seg.push(d); len += d; }
+    if (!seg.length) continue;
+    const tw = ctx.measureText(lab.name).width; if (len < tw + 24) continue;
+    const at = d => { let r = d, j = 0; while (j < seg.length - 1 && r > seg[j]) { r -= seg[j]; j++; } const A = pts[j], B = pts[j + 1], g = seg[j] ? Math.min(1, r / seg[j]) : 0; return [A[0] + (B[0] - A[0]) * g, A[1] + (B[1] - A[1]) * g]; };
+    const [cx, cy] = at(len / 2);
+    if (cx < -M || cy < -M || cx > v.w + M || cy > v.h + M) continue;
+    const s0 = at(Math.max(0, len / 2 - tw / 2)), s1 = at(Math.min(len, len / 2 + tw / 2));
+    let ang = Math.atan2(s1[1] - s0[1], s1[0] - s0[0]); if (ang > Math.PI / 2) ang -= Math.PI; if (ang < -Math.PI / 2) ang += Math.PI;
+    const hw = Math.abs(Math.cos(ang)) * tw / 2 + Math.abs(Math.sin(ang)) * size * 0.7, hh = Math.abs(Math.sin(ang)) * tw / 2 + Math.abs(Math.cos(ang)) * size * 0.7;
+    const r = [cx - hw - 4, cy - hh - 4, cx + hw + 4, cy + hh + 4];
+    if (placed.some(q => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1])) continue;
+    const prev = lastByName.get(lab.name); if (prev && prev.some(([x, y]) => Math.hypot(x - cx, y - cy) < 260)) continue;
+    placed.push(r); if (!prev) lastByName.set(lab.name, [[cx, cy]]); else prev.push([cx, cy]);
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(ang); ctx.strokeText(lab.name, 0, 0); ctx.fillText(lab.name, 0, 0); ctx.restore();
+  }
 }
 let ADDR = null;
 async function loadAddresses() {
@@ -358,12 +427,59 @@ async function loadAddresses() {
   } catch (e) { $("addrNote").textContent = "streets only"; console.error(e); }
 }
 
-/* ---------- map ---------- */
+/* ---------- map: rotated so Guelph's street grid runs up and down ---------- */
+// The map is turned 46° clockwise by rotating the Web Mercator projection around downtown.
+// ROT_DEG is counterclockwise-positive, so -46 turns the map clockwise. Clicks, zooming and every layer follow it.
+const ROT_DEG = -46;
+const ROT_CRS = (() => {
+  const SM = L.Projection.SphericalMercator, t = ROT_DEG * Math.PI / 180, cs = Math.cos(t), sn = Math.sin(t);
+  const c = SM.project(L.latLng(43.545, -80.25));
+  const proj = {
+    bounds: SM.bounds,
+    project(ll) { const p = SM.project(ll), dx = p.x - c.x, dy = p.y - c.y; return L.point(c.x + dx * cs - dy * sn, c.y + dx * sn + dy * cs); },
+    unproject(p) { const dx = p.x - c.x, dy = p.y - c.y; return SM.unproject(L.point(c.x + dx * cs + dy * sn, c.y - dx * sn + dy * cs)); },
+  };
+  return L.extend({}, L.CRS.EPSG3857, {projection:proj, code:"GUELPH-ROT"});
+})();
+// Fit a set of rings (arrays of LatLngs) on the rotated map. Leaflet's own fitBounds assumes north-up.
+function fitTo(rings, o = {}) {
+  const pad = o.pad || fitPad(), P = v => L.point(v || [0, 0]);
+  const tl = P(pad.paddingTopLeft || pad.padding), br = P(pad.paddingBottomRight || pad.padding);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const r of rings) for (const q of r) { const p = map.project(q, 0); if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x; if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
+  const size = map.getSize().subtract(tl).subtract(br), w = Math.max(x1 - x0, 1e-9), h = Math.max(y1 - y0, 1e-9);
+  let z = Math.floor(Math.log2(Math.min(size.x / w, size.y / h)) * 4) / 4;
+  z = Math.max(map.getMinZoom(), Math.min(z, o.maxZoom != null ? o.maxZoom : map.getMaxZoom()));
+  const k = Math.pow(2, z), c = map.unproject(L.point((x0 + x1) / 2 * k, (y0 + y1) / 2 * k).add(br.subtract(tl).divideBy(2)), z);
+  if (o.fly) map.flyTo(c, z, {duration:0.6}); else map.setView(c, z, {animate:false});
+}
+// A canvas redrawn after each pan or zoom; used for building footprints and street labels.
+const CanvasLayer = L.Layer.extend({
+  initialize(draw, pane) { this._draw = draw; L.setOptions(this, {pane}); },
+  onAdd(m) { this._c = L.DomUtil.create("canvas", "leaflet-zoom-hide"); this._c.style.pointerEvents = "none"; m.getPane(this.options.pane).appendChild(this._c); m.on("moveend zoomend resize viewreset", this.redraw, this); this.redraw(); },
+  onRemove(m) { this._c.remove(); m.off("moveend zoomend resize viewreset", this.redraw, this); },
+  redraw() {
+    const m = this._map; if (!m) return;
+    const s = m.getSize(), dpr = window.devicePixelRatio || 1, c = this._c, tl = m.containerPointToLayerPoint([0, 0]);
+    c.width = s.x * dpr; c.height = s.y * dpr; c.style.width = s.x + "px"; c.style.height = s.y + "px"; L.DomUtil.setPosition(c, tl);
+    const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const z = m.getZoom(), k = Math.pow(2, z), o = m.getPixelOrigin();
+    this._draw(ctx, {z, k, ox:o.x + tl.x, oy:o.y + tl.y, w:s.x, h:s.y});
+  },
+});
+const NorthArrow = L.Control.extend({
+  options:{position:"topright"},
+  onAdd() { const d = L.DomUtil.create("div", "north"); d.title = "North";
+    d.innerHTML = `<svg viewBox="0 0 40 40" width="40" height="40" aria-label="North arrow, map rotated ${Math.abs(ROT_DEG)}° ${ROT_DEG < 0 ? "clockwise" : "counterclockwise"}" role="img"><g transform="rotate(${-ROT_DEG} 20 20)"><path d="M20 6 26 26 20 22 14 26z" fill="currentColor"/><text x="20" y="36" text-anchor="middle" font-size="9" font-weight="700" fill="currentColor">N</text></g></svg>`;
+    return d; },
+});
+
 function buildMap() {
   const touch = !!(window.UI && window.UI.touch);
-  map = L.map("map", {zoomControl:!touch, minZoom:11, maxZoom:17, preferCanvas:true, attributionControl:!touch, zoomSnap:0.25});
+  map = L.map("map", {crs:ROT_CRS, zoomControl:!touch, minZoom:11, maxZoom:17, preferCanvas:true, attributionControl:!touch, zoomSnap:0.25});
   if (!touch) map.attributionControl.setPrefix(false).addAttribution("Statistics Canada 2021 Census · City of Guelph Open Data");
-  for (const [p, z] of [["da", 400], ["water", 410], ["roads", 420], ["bound", 425], ["sel", 430]]) { map.createPane(p).style.zIndex = z; if (p !== "da") map.getPane(p).style.pointerEvents = "none"; }
+  for (const [p, z] of [["da", 400], ["bldg", 405], ["water", 410], ["roads", 420], ["bound", 425], ["labels", 428], ["sel", 430]]) { map.createPane(p).style.zIndex = z; if (p !== "da") map.getPane(p).style.pointerEvents = "none"; }
+  new NorthArrow().addTo(map);
   const rend = p => L.canvas({pane:p, padding:0.3});
   const rDa = rend("da"), rW = rend("water"), rR = rend("roads"); selRend = L.svg({pane:"sel"});
   daLayer = L.featureGroup().addTo(map);
@@ -381,10 +497,12 @@ function buildMap() {
   D.maskL = L.polygon([[[60, -100], [60, -60], [30, -60], [30, -100]], ...city], {renderer:rB, stroke:false, fillOpacity:0.8, interactive:false}).addTo(map);
   D.boundL = L.polygon(city, {renderer:rB, fill:false, weight:2.4, interactive:false}).addTo(map);
   selLayer = L.layerGroup().addTo(map);
-  map.fitBounds(D.boundL.getBounds(), (window.UI && window.UI.pad) ? window.UI.pad(10) : {padding:[10, 10]});
+  D.cityRings = city;
+  fitTo(city, {pad:(window.UI && window.UI.pad) ? window.UI.pad(10) : {padding:[10, 10]}});
+  D.rR = rR;
   map.on("zoomend", styleRoads);
   styleBase();
-  const obs = () => { readTokens(); styleBase(); paint(); drawSel(); };
+  const obs = () => { readTokens(); styleBase(); paint(); drawSel(); if (CTX.bl) { CTX.bl.redraw(); CTX.lb.redraw(); } };
   new MutationObserver(obs).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", obs);
   window.addEventListener("resize", () => map.invalidateSize());
@@ -398,7 +516,7 @@ function styleBase() {
 function styleRoads() {
   const z = map.getZoom();
   for (const [cls, l] of D.roadL) {
-    const w = cls === 3 ? (z < 13 ? 1.4 : 2.4) : (z < 13 ? 0 : z < 14 ? 0.8 : 1.4);
+    const w = cls === 3 ? (z < 13 ? 1.4 : z < 15 ? 2.4 : 3.4) : cls === 2 ? (z < 13 ? 0 : z < 14 ? 0.8 : z < 15.5 ? 1.4 : 2.2) : (z < 14 ? 0 : z < 15 ? 0.6 : z < 16 ? 1 : 1.6);
     l.setStyle({color:tok.street, weight:w, opacity: w ? 0.85 : 0});
   }
 }
@@ -508,7 +626,7 @@ function select(a, o = {}) {
   if (!a) return;
   if (!o.keepAddr && S.addr && S.addr.da !== a) S.addr = null;
   S.sel = a; drawSel(); renderProfile(); drawScatter(); hook("update"); if (!o.quiet) hook("onSelect", a, o);
-  if (o.zoom) map.flyToBounds(a.poly.getBounds(), {maxZoom:15.5, duration:0.6, ...fitPad()});
+  if (o.zoom) fitTo(a.rings.map(ll), {maxZoom:15.5, fly:true});
 }
 function drawSel() {
   if (!selLayer) return; selLayer.clearLayers();
@@ -546,7 +664,7 @@ function renderProfile() {
   on("pin", () => { S.pin = S.pin === a ? null : a; renderProfile(); drawSel(); });
   on("unpin", () => { S.pin = null; renderProfile(); drawSel(); drawScatter(); });
   on("swap", () => { const t = S.pin; S.pin = S.sel; S.sel = t; renderProfile(); drawSel(); drawScatter(); });
-  on("zoomto", () => map.flyToBounds(a.poly.getBounds(), {maxZoom:15.5, duration:0.6, ...fitPad()}));
+  on("zoomto", () => fitTo(a.rings.map(ll), {maxZoom:15.5, fly:true}));
 }
 
 function niceTicks(lo, hi, n = 4) { const span = hi - lo || 1, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0)), r = step0 / mag, step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag; const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) t.push(+v.toFixed(10)); return t; }

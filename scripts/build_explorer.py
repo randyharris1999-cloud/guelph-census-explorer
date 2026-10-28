@@ -192,3 +192,9 @@ bound = [enc([(round(x, 5), round(y, 5)) for x, y in ring]) for p in polys for r
 J = json.load(open(os.path.join(OUT, "explorer.json"))); J["boundary"] = bound
 json.dump(J, open(os.path.join(OUT, "explorer.json"), "w"), separators=(",", ":"))
 print("boundary rings", len(bound), "points", sum(len(b) // 2 for b in bound))
+
+# ---------- context layer: building footprints, all streets with names (loaded after the map) ----------
+BLD = json.load(open(os.path.join(FMG, "buildings.json")))          # delta-encoded E5 rings
+segs_all = [[ni, cls, fl] for ni, cls, fl in SN["segs"]]              # delta-encoded E5 lines
+json.dump({"b": BLD, "names": SN["names"], "s": segs_all}, open(os.path.join(OUT, "context.json"), "w"), separators=(",", ":"))
+print("context:", len(BLD), "buildings,", len(segs_all), "street segments,", os.path.getsize(os.path.join(OUT, "context.json")) // 1024, "KB")
