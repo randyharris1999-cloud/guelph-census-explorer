@@ -11,6 +11,12 @@ const TEAL = ["#E0F4FC","#A6DFF6","#5CC6EE","#00A6E5","#00759F","#044E6B"];
 const AMBER = ["#F6EBD9","#F0CF9C","#E6A85E","#C9772E","#8E4B17","#5C2E0C"];
 const GREEN = ["#EEF4E3","#CFE2AE","#A8CB78","#85B24A","#5B8A3A","#365C22"];
 const SCORE = ["#B8432F","#E07B39","#E9C46A","#7FB37A","#0E6B66"];
+// Selection outlines use a colour that complements each colour ramp: A is the chosen neighbourhood, B the one it's compared with.
+// Each is drawn over a white edge so it stays clean on every class colour and on the gray basemap.
+const SELCOL = {teal:["#F08C00", "#C2185B"], amber:["#5B3FD6", "#0E7490"], green:["#C2185B", "#F08C00"], score:["#7C3AED", "#1D4ED8"]};
+// A is the first neighbourhood chosen; when comparing, the pinned one stays A and the newly tapped one is B.
+const AB = () => (S.pin && S.sel && S.pin !== S.sel) ? [S.pin, S.sel] : [S.sel, null];
+const selCols = () => SELCOL[(MEASURES[S.measure] || {}).rampName] || SELCOL.teal;
 const n0 = v => Math.round(v).toLocaleString("en-CA");
 const p0 = v => v.toFixed(0) + "%", p1 = v => v.toFixed(1) + "%";
 const kmoney = v => "$" + Math.round(v / 1000) + "k", money = v => "$" + n0(v);
@@ -31,7 +37,7 @@ function initMeasures() {
   for (const m of D.measures) {
     if (!GROUPS.includes(m.group)) GROUPS.push(m.group);
     const [fmt, long] = FMT[m.kind];
-    MEASURES[m.key] = {g:GROUPS.indexOf(m.group), label:m.label, desc:m.desc, fmt, long, ramp:RAMPS[m.ramp],
+    MEASURES[m.key] = {g:GROUPS.indexOf(m.group), label:m.label, desc:m.desc, fmt, long, ramp:RAMPS[m.ramp], rampName:m.ramp,
       city:() => [D.city[m.key] == null ? "n/a" : long(D.city[m.key]), m.key === "score" ? "average resident" : "City of Guelph"]};
   }
   KEYS = Object.keys(MEASURES);
@@ -86,7 +92,7 @@ function rampN(stops, k) {
 
 /* ---------- data ---------- */
 let D, map, daLayer, selLayer, selRend, tok = {};
-const readTokens = () => { const cs = getComputedStyle(document.documentElement); for (const t of ["bldg","bldg-edge","label","halo","land","bg","water","water-edge","street","case","hwy","nodata","sel","panel","ink","accent","warn","muted"]) tok[t] = cs.getPropertyValue("--" + t).trim(); };
+const readTokens = () => { const cs = getComputedStyle(document.documentElement); for (const t of ["block","row","row-over","rail","bldg-out","road-out","road-case","stream","bldg","bldg-edge","label","halo","land","bg","water","water-edge","street","case","hwy","nodata","sel","panel","ink","accent","warn","muted"]) tok[t] = cs.getPropertyValue("--" + t).trim(); };
 const ll = fl => { const o = []; for (let j = 0; j < fl.length; j += 2) o.push([fl[j + 1] / 1e5, fl[j] / 1e5]); return o; };
 const daName = a => a.streets.length >= 2 ? a.streets[0] + " & " + a.streets[1] : a.streets[0] || ("DA " + a.da);
 
@@ -97,11 +103,79 @@ async function boot() {
   initMeasures();
   $("sub").textContent = `${n0(sum("pop"))} residents in ${D.das.length} neighbourhoods and ${KEYS.length} measures. Map any one, open a neighbourhood's profile, and see how measures move together.`;
   readTokens(); buildMap(); buildControls(); refresh(); $("loading").hidden = true;
-  const start = D.das.find(a => a.streets[0] === "Wyndham St N") || D.das.find(a => a.pop > 0);
-  select(start, {quiet:true});
-  loadAddresses(); loadContext(); hook("onReady");
+  loadBasemap(); loadAddresses(); loadContext(); hook("onReady");
 }
 const CTX = {};
+/* ---------- grayscale basemap: City parcels inside the city (blocks and rights-of-way), OpenStreetMap outside ---------- */
+const BASE = {};
+function packRings(list, pick) {
+  // list items -> zoom-0 pixel coordinates in the rotated projection, with a box per item for culling
+  const P = (lon, lat) => map.project(L.latLng(lat, lon), 0);
+  let nPts = 0, nRings = 0; for (const it of list) for (const fl of pick(it)) { nPts += fl.length / 2; nRings++; }
+  const x = new Float64Array(nPts), y = new Float64Array(nPts), roff = new Int32Array(nRings + 1), ioff = new Int32Array(list.length + 1), box = new Float64Array(list.length * 4), cls = new Uint8Array(list.length);
+  let k = 0, r = 0;
+  list.forEach((it, i) => { let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const fl of pick(it)) { let X = 0, Y = 0; roff[r] = k;
+      for (let j = 0; j < fl.length; j += 2, k++) { X += fl[j]; Y += fl[j + 1]; const p = P(X / 1e5, Y / 1e5); x[k] = p.x; y[k] = p.y; if (p.x < a) a = p.x; if (p.x > c) c = p.x; if (p.y < b) b = p.y; if (p.y > d) d = p.y; }
+      r++; }
+    ioff[i + 1] = r; box[i * 4] = a; box[i * 4 + 1] = b; box[i * 4 + 2] = c; box[i * 4 + 3] = d; cls[i] = typeof it[0] === "number" && Array.isArray(it[1]) ? it[0] : 0; });
+  roff[nRings] = k;
+  return {x, y, roff, ioff, box, cls, n:list.length};
+}
+function tracePack(ctx, v, G, want, close) {
+  const X0 = v.ox / v.k - 2, Y0 = v.oy / v.k - 2, X1 = (v.ox + v.w) / v.k + 2, Y1 = (v.oy + v.h) / v.k + 2;
+  for (let i = 0; i < G.n; i++) {
+    if (want != null && G.cls[i] !== want) continue;
+    if (G.box[i * 4 + 2] < X0 || G.box[i * 4] > X1 || G.box[i * 4 + 3] < Y0 || G.box[i * 4 + 1] > Y1) continue;
+    for (let r = G.ioff[i]; r < G.ioff[i + 1]; r++) {
+      for (let j = G.roff[r]; j < G.roff[r + 1]; j++) { const px = G.x[j] * v.k - v.ox, py = G.y[j] * v.k - v.oy; if (j === G.roff[r]) ctx.moveTo(px, py); else ctx.lineTo(px, py); }
+      if (close) ctx.closePath();
+    }
+  }
+}
+async function loadBasemap() {
+  try {
+    const r = await fetch("data/basemap.json"); if (!r.ok) throw new Error("basemap");
+    const B = await r.json();
+    BASE.parcels = packRings(B.p, it => it.slice(1));
+    BASE.roads = packRings(B.r, it => [it[1]]);
+    BASE.bldg = packRings(B.b, it => [it]);
+    BASE.water = packRings(B.w, it => [it]);
+    BASE.streams = packRings(B.s, it => [it[1]]);
+    BASE.under = new CanvasLayer(drawBaseUnder, "base").addTo(map);
+    BASE.over = new CanvasLayer(drawBaseOver, "rowover").addTo(map);
+    BASE.ready = true; styleRoads();
+  } catch (e) { console.error(e); }
+}
+// Under the census layer: blocks, rights-of-way and rail inside the city; streets, water and buildings outside it.
+function drawBaseUnder(ctx, v) {
+  const z = v.z;
+  ctx.fillStyle = tok.block; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 0, true); ctx.fill("evenodd");
+  ctx.fillStyle = tok.rail; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 2, true); ctx.fill("evenodd");
+  ctx.fillStyle = tok.row; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 1, true); ctx.fill("evenodd");
+  if (z >= 15.5) { ctx.strokeStyle = tok["road-case"]; ctx.lineWidth = 0.5; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 0, true); ctx.stroke(); }
+  ctx.fillStyle = tok.water; ctx.beginPath(); tracePack(ctx, v, BASE.water, null, true); ctx.fill("evenodd");
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.strokeStyle = tok.stream;
+  for (const c of [0, 1]) { ctx.lineWidth = c ? (z < 13 ? 1.6 : 3) : (z < 13.5 ? 0 : 1); if (!ctx.lineWidth) continue; ctx.beginPath(); tracePack(ctx, v, BASE.streams, c, false); ctx.stroke(); }
+  // outside streets: metre-ish widths that grow with zoom; casing first, then fill
+  const m = Math.pow(2, z - 15) * 3.4;                // about 1 px per metre at zoom 16 on these latitudes
+  const W = [z < 13.5 ? 0 : 5 * m, 8 * m, 11 * m, 15 * m, 22 * m];
+  for (const pass of [0, 1]) for (const c of [0, 1, 2, 3, 4]) {
+    let w = Math.max(c >= 3 ? 1.6 : c >= 1 ? (z < 12.5 ? 0 : 0.9) : 0, W[c]); if (!W[c] && c === 0) continue;
+    if (pass === 0) { if (w < 3) continue; ctx.strokeStyle = tok["road-case"]; ctx.lineWidth = w + 1.6; }
+    else { ctx.strokeStyle = tok["road-out"]; ctx.lineWidth = w; }
+    ctx.beginPath(); tracePack(ctx, v, BASE.roads, c, false); ctx.stroke();
+  }
+  if (z >= 13.5) { ctx.globalAlpha = Math.min(1, (z - 13.5) / 0.75 + 0.3); ctx.fillStyle = tok["bldg-out"]; ctx.beginPath(); tracePack(ctx, v, BASE.bldg, null, true); ctx.fill(); ctx.globalAlpha = 1; }
+}
+// Over the census layer: rights-of-way, softly, so the street grid and the blocks read through the colours.
+function drawBaseOver(ctx, v) {
+  if (v.z < 12) return;
+  ctx.globalAlpha = Math.min(1, (v.z - 12) / 1.25);
+  ctx.fillStyle = tok["row-over"]; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 1, true); ctx.fill("evenodd");
+  ctx.globalAlpha = 1;
+}
 async function loadContext() {
   try {
     const r = await fetch("data/context.json"); if (!r.ok) throw new Error("context");
@@ -143,9 +217,9 @@ function drawBuildings(ctx, v, off, bx, by, box) {
 }
 function drawLabels(ctx, v, labels) {
   if (v.z < 13.25) return;
-  const minCls = v.z < 14.25 ? 3 : v.z < 15.25 ? 2 : 1, size = v.z >= 16 ? 12.5 : 11.5;
+  const minCls = v.z < 14.25 ? 3 : v.z < 15.25 ? 2 : 1, size = v.z >= 16 ? 14.5 : 13.5;
   ctx.font = `600 ${size}px "Public Sans", system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.lineJoin = "round"; ctx.lineWidth = 3.2; ctx.strokeStyle = tok.halo; ctx.fillStyle = tok.label;
+  ctx.lineJoin = "round"; ctx.lineWidth = 3.6; ctx.strokeStyle = tok.halo; ctx.fillStyle = tok.label;
   const placed = [], lastByName = new Map(), M = 20;
   for (const lab of labels) {
     if (lab.cls < minCls) continue;
@@ -231,10 +305,15 @@ function buildMap() {
   const touch = !!(window.UI && window.UI.touch);
   map = L.map("map", {crs:ROT_CRS, zoomControl:!touch, minZoom:11, maxZoom:17, preferCanvas:true, attributionControl:!touch, zoomSnap:0.25});
   if (!touch) map.attributionControl.setPrefix(false).addAttribution("Statistics Canada 2021 Census · City of Guelph Open Data");
-  for (const [p, z] of [["da", 400], ["bldg", 405], ["water", 410], ["roads", 420], ["bound", 425], ["labels", 428], ["sel", 430]]) { map.createPane(p).style.zIndex = z; if (p !== "da") map.getPane(p).style.pointerEvents = "none"; }
+  for (const [p, z] of [["base", 350], ["da", 400], ["rowover", 402], ["bldg", 405], ["water", 410], ["roads", 420], ["bound", 425], ["labels", 428], ["sel", 430]]) { map.createPane(p).style.zIndex = z; if (p !== "da") map.getPane(p).style.pointerEvents = "none"; }
   new NorthArrow().addTo(map);
   const rend = p => L.canvas({pane:p, padding:0.3});
   const rDa = rend("da"), rW = rend("water"), rR = rend("roads"); selRend = L.svg({pane:"sel"});
+  // A few neighbourhoods reach past the city limits; draw the census colours only inside the city.
+  const cityLL = D.boundary.map(ll), drawDa = rDa._draw;
+  rDa._draw = function () { const c = this._ctx; c.save(); c.beginPath();
+    for (const r of cityLL) r.forEach((q, i) => { const p = map.latLngToLayerPoint(q); i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y); });
+    c.clip("evenodd"); drawDa.call(this); c.restore(); };
   daLayer = L.featureGroup().addTo(map);
   for (const a of D.das) {
     a.poly = L.polygon(a.rings.map(ll), {renderer:rDa, weight:0.6, fillOpacity:0.92, smoothFactor:0.5}).addTo(daLayer);
@@ -251,25 +330,40 @@ function buildMap() {
   D.boundL = L.polygon(city, {renderer:rB, fill:false, weight:2.4, interactive:false}).addTo(map);
   selLayer = L.layerGroup().addTo(map);
   D.cityRings = city;
-  fitTo(city, {pad:(window.UI && window.UI.pad) ? window.UI.pad(10) : {padding:[10, 10]}});
+  lockExtent();
+  window.addEventListener("resize", () => setTimeout(lockExtent, 50));
   D.rR = rR;
   map.on("zoomend", styleRoads);
   styleBase();
-  const obs = () => { readTokens(); styleBase(); paint(); drawSel(); if (CTX.bl) { CTX.bl.redraw(); CTX.lb.redraw(); } };
+  const obs = () => { readTokens(); styleBase(); paint(); drawSel(); if (CTX.bl) { CTX.bl.redraw(); CTX.lb.redraw(); } if (BASE.ready) { BASE.under.redraw(); BASE.over.redraw(); } };
   new MutationObserver(obs).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", obs);
   window.addEventListener("resize", () => map.invalidateSize());
 }
+// Smallest zoom = the whole city filling the screen (the opening view). Panning stops a little past the city limits.
+// Leaflet's maxBounds assumes a north-up map, so its corner lookups are pointed at the rotated rectangle instead.
+function lockExtent() {
+  map.setMinZoom(0); map.setMaxBounds(null);
+  fitTo(D.cityRings, {pad:(window.UI && window.UI.pad) ? window.UI.pad(10) : {padding:[10, 10]}});
+  const z = map.getZoom(); map.setMinZoom(z);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const r of D.cityRings) for (const q of r) { const p = map.project(q, 0); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  const view = map.getSize().divideBy(Math.pow(2, z)), mx = Math.max(view.x - (x1 - x0), 0) / 2 + (x1 - x0) * 0.06, my = Math.max(view.y - (y1 - y0), 0) / 2 + (y1 - y0) * 0.06;
+  const ne = map.unproject(L.point(x1 + mx, y0 - my), 0), sw = map.unproject(L.point(x0 - mx, y1 + my), 0);
+  const b = L.latLngBounds(ne, sw); b.getNorthEast = () => ne; b.getSouthWest = () => sw;
+  map.options.maxBoundsViscosity = 1; map.setMaxBounds(b);
+}
 function styleBase() {
   D.waterL.forEach(p => p.setStyle({color:tok["water-edge"], fillColor:tok.water}));
-  D.maskL.setStyle({fillColor:tok.land});
+  D.maskL.setStyle({fillColor:tok.land, fillOpacity:0.38});
   D.boundL.setStyle({color:tok.ink, dashArray:"7 4 2 4", opacity:0.8});
   styleRoads();
 }
 function styleRoads() {
   const z = map.getZoom();
   for (const [cls, l] of D.roadL) {
-    const w = cls === 3 ? (z < 13 ? 1.4 : z < 15 ? 2.4 : 3.4) : cls === 2 ? (z < 13 ? 0 : z < 14 ? 0.8 : z < 15.5 ? 1.4 : 2.2) : (z < 14 ? 0 : z < 15 ? 0.6 : z < 16 ? 1 : 1.6);
+    let w = cls === 3 ? (z < 13 ? 1.4 : z < 15 ? 2.4 : 3.4) : cls === 2 ? (z < 13 ? 0 : z < 14 ? 0.8 : z < 15.5 ? 1.4 : 2.2) : (z < 14 ? 0 : z < 15 ? 0.6 : z < 16 ? 1 : 1.6);
+    if (BASE.ready && cls < 3) w = 0;
     l.setStyle({color:tok.street, weight:w, opacity: w ? 0.85 : 0});
   }
 }
@@ -277,7 +371,7 @@ function tipHtml(a) {
   const M = MEASURES[S.measure], v = a[S.measure];
   return `<b>${esc(a.name)}</b><br><span class="tv">${v == null ? "n/a" : M.long(v)}</span> · ${esc(lc(M.label))}`;
 }
-function hover(a, on) { if (a === S.sel || a === S.pin) return; a.poly.setStyle(on ? {weight:2.2, color:tok.sel} : {weight:0.6, color:tok.panel}); if (on) a.poly.bringToFront(); const c = document.querySelector(`.scatter circle[data-i="${a.i}"]`); if (c) c.setAttribute("r", on ? 6 : c.dataset.r); }
+function hover(a, on) { if (a === S.sel || a === S.pin) return; a.poly.setStyle(on ? {weight:2.4, color:selCols()[0]} : {weight:0.6, color:tok.panel}); if (on) a.poly.bringToFront(); const c = document.querySelector(`.scatter circle[data-i="${a.i}"]`); if (c) c.setAttribute("r", on ? 6 : c.dataset.r); }
 
 /* ---------- controls ---------- */
 function buildControls() {
@@ -378,19 +472,26 @@ function pickAddress(i) {
 function select(a, o = {}) {
   if (!a) return;
   if (!o.keepAddr && S.addr && S.addr.da !== a) S.addr = null;
-  S.sel = a; drawSel(); renderProfile(); drawScatter(); hook("update"); if (!o.quiet) hook("onSelect", a, o);
+  S.sel = a; drawSel(); renderProfile(); drawScatter(); renderRanks(); hook("update"); if (!o.quiet) hook("onSelect", a, o);
   if (o.zoom) fitTo(a.rings.map(ll), {maxZoom:15.5, fly:true});
 }
+function clearSel() { S.sel = null; S.pin = null; S.addr = null; drawSel(); renderProfile(); drawScatter(); renderRanks(); hook("update"); }
 function drawSel() {
   if (!selLayer) return; selLayer.clearLayers();
   D.das.forEach(a => { if (a !== S.sel && a !== S.pin) a.poly.setStyle({weight:0.6, color:tok.panel}); });
-  if (S.pin) L.polygon(S.pin.rings.map(ll), {renderer:selRend, color:tok.warn, weight:3, fill:false, dashArray:"6 4", interactive:false}).addTo(selLayer);
-  if (S.sel) L.polygon(S.sel.rings.map(ll), {renderer:selRend, color:tok.sel, weight:3, fill:false, interactive:false}).addTo(selLayer);
-  if (S.addr) L.circleMarker([S.addr.lat, S.addr.lon], {renderer:selRend, radius:7, color:tok.panel, weight:2.5, fillColor:tok.warn, fillOpacity:1, interactive:false}).addTo(selLayer)
+  const [ca, cb] = selCols(), edge = "#FFFFFF";
+  const ring = (a, col) => { const rs = a.rings.map(ll);
+    L.polygon(rs, {renderer:selRend, color:edge, weight:8, opacity:0.95, fill:false, interactive:false, lineJoin:"round"}).addTo(selLayer);
+    L.polygon(rs, {renderer:selRend, color:col, weight:4, fill:true, fillColor:col, fillOpacity:0.12, interactive:false, lineJoin:"round"}).addTo(selLayer); };
+  const [A, B] = AB();
+  if (S.pin && !B && S.pin !== A) ring(S.pin, cb);
+  if (B) ring(B, cb);
+  if (A) ring(A, ca);
+  if (S.addr) L.circleMarker([S.addr.lat, S.addr.lon], {renderer:selRend, radius:8, color:"#FFFFFF", weight:3, fillColor:ca, fillOpacity:1, interactive:false}).addTo(selLayer)
     .bindTooltip(esc(S.addr.text), {permanent:true, direction:"top", offset:[0, -8], className:"tip"});
 }
 function renderProfile() {
-  const a = S.sel, b = S.pin && S.pin !== a ? S.pin : null;
+  const [a, b] = AB();
   if (!a) { $("profile").innerHTML = `<div class="empty">Tap any neighbourhood on the map to see every measure beside the city figure.</div>`; return; }
   const area = a.area < 1 ? (a.area * 100).toFixed(0) + " ha" : a.area.toFixed(2) + " km²";
   const head = `<div class="title"><b>${esc(a.name)}</b><small>DA ${a.da} · ${a.pop == null ? "n/a" : n0(a.pop)} residents · ${area}${a.streets.length > 2 ? " · also " + esc(a.streets.slice(2, 4).join(", ")) : ""}</small></div>${S.addr && S.addr.da === a ? `<div class="addrline"><i></i><span><b>${esc(S.addr.text)}</b> is in this neighbourhood</span></div>` : ""}`;
@@ -400,23 +501,23 @@ function renderProfile() {
   for (let gi = 0; gi < GROUPS.length; gi++) { rows += gh(gi); for (const k of KEYS.filter(k => MEASURES[k].g === gi)) {
     const M = MEASURES[k], va = a[k], vb = b ? b[k] : null;
     const pa = va == null ? null : pctRank(k, va), pb = vb == null ? null : pctRank(k, vb);
-    const strip = `<span class="strip">${pa != null ? `<i style="left:${pa}%"></i>` : ""}${pb != null ? `<i class="b" style="left:${pb}%"></i>` : ""}</span>`;
+    const strip = `<span class="strip">${pa != null ? `<i style="left:${pa}%;background:${selCols()[0]}"></i>` : ""}${pb != null ? `<i class="b" style="left:${pb}%;background:${selCols()[1]}"></i>` : ""}</span>`;
     const f = v => v == null ? "n/a" : M.long(v);
     let cells;
     if (b) { const d = va != null && vb != null ? va - vb : null; const ds = d == null ? "" : (d > 0 ? "+" : d < 0 ? "−" : "±") + M.fmt(Math.abs(d)).replace("%", " pt");
-      cells = `<span class="v">${f(va)}</span><span class="v" style="color:var(--warn)">${f(vb)}</span><span class="v city">${ds}</span>`; }
+      cells = `<span class="v">${f(va)}</span><span class="v">${f(vb)}</span><span class="v city">${ds}</span>`; }
     else cells = `<span class="v">${f(va)}</span><span class="v city">${M.city()[0]}</span>`;
     rows += `<button data-k="${k}" aria-current="${k === S.measure}" title="Map ${esc(M.label)}"><span class="lbl"><span>${M.label}</span>${strip}</span>${cells}</button>`;
   } }
-  const ph = b ? `<div class="ph"><span></span><span class="v">This</span><span class="v">Pinned</span><span class="v">Diff.</span></div>` : `<div class="ph"><span></span><span class="v">Here</span><span class="v">Guelph</span></div>`;
-  const key = `<div class="key"><span><i style="background:var(--accent)"></i>${b ? esc(a.name) : "Where it ranks among 201 neighbourhoods"}</span>${b ? `<span><i style="background:var(--warn)"></i>${esc(b.name)}</span>` : ""}<span>dashed line = middle</span></div>`;
+  const ph = b ? `<div class="ph"><span></span><span class="v">A</span><span class="v">B</span><span class="v">A − B</span></div>` : `<div class="ph"><span></span><span class="v">Here</span><span class="v">Guelph</span></div>`;
+  const key = `<div class="key"><span><i style="background:${selCols()[0]}"></i>${b ? "A · " + esc(a.name) : "Where it ranks among 201 neighbourhoods"}</span>${b ? `<span><i style="background:${selCols()[1]}"></i>B · ${esc(b.name)}</span>` : ""}<span>dashed line = middle</span></div>`;
   $("profNote").textContent = b ? "comparing two" : "";
   $("profile").innerHTML = head + acts + key + `<div class="ptable${b ? " cmp" : ""}">${ph}${rows}</div>`;
   $("profile").querySelectorAll(".ptable button").forEach(x => x.onclick = () => setMeasure(x.dataset.k));
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
-  on("pin", () => { S.pin = S.pin === a ? null : a; renderProfile(); drawSel(); });
-  on("unpin", () => { S.pin = null; renderProfile(); drawSel(); drawScatter(); });
-  on("swap", () => { const t = S.pin; S.pin = S.sel; S.sel = t; renderProfile(); drawSel(); drawScatter(); });
+  on("pin", () => { S.pin = S.pin === a ? null : a; renderProfile(); drawSel(); renderRanks(); hook("update"); });
+  on("unpin", () => { S.pin = null; S.sel = a; renderProfile(); drawSel(); drawScatter(); renderRanks(); hook("update"); });
+  on("swap", () => { const t = S.pin; S.pin = S.sel; S.sel = t; renderProfile(); drawSel(); drawScatter(); renderRanks(); hook("update"); });
   on("zoomto", () => fitTo(a.rings.map(ll), {maxZoom:15.5, fly:true}));
 }
 
@@ -443,12 +544,12 @@ function drawScatter() {
   const order = [...pts].sort((a, b) => (a === S.sel || a === S.pin) - (b === S.sel || b === S.pin));
   for (const a of order) { const rr = Math.max(2.6, Math.min(5, Math.sqrt((a.pop || 100) / 60))); const dim = S.cls != null && a.cls !== S.cls;
     const sel = a === S.sel || a === S.pin;
-    g += `<circle data-i="${a.i}" data-r="${rr.toFixed(1)}" cx="${sx(a[S.measure]).toFixed(1)}" cy="${sy(a[S.y]).toFixed(1)}" r="${sel ? 6 : rr.toFixed(1)}" fill="${colorOf(a)}" class="${sel ? "sel" : ""}${dim ? " dim" : ""}"${a === S.pin && a !== S.sel ? ` style="stroke:var(--warn)"` : ""}><title>${esc(a.name)}: ${X.long(a[S.measure])}, ${Y.long(a[S.y])}</title></circle>`; }
+    g += `<circle data-i="${a.i}" data-r="${rr.toFixed(1)}" cx="${sx(a[S.measure]).toFixed(1)}" cy="${sy(a[S.y]).toFixed(1)}" r="${sel ? 6 : rr.toFixed(1)}" fill="${colorOf(a)}" class="${sel ? "sel" : ""}${dim ? " dim" : ""}"${sel ? ` style="stroke:${a === AB()[0] ? selCols()[0] : selCols()[1]}"` : ""}><title>${esc(a.name)}: ${X.long(a[S.measure])}, ${Y.long(a[S.y])}</title></circle>`; }
   g += `</svg>`;
   $("scatter").innerHTML = g;
   $("scatter").querySelectorAll("circle").forEach(c => { const a = D.das[+c.dataset.i];
     c.onclick = () => select(a, {zoom:true});
-    c.onmouseenter = () => { if (a !== S.sel && a !== S.pin) { a.poly.setStyle({weight:2.2, color:tok.sel}); a.poly.bringToFront(); } };
+    c.onmouseenter = () => { if (a !== S.sel && a !== S.pin) { a.poly.setStyle({weight:2.4, color:selCols()[0]}); a.poly.bringToFront(); } };
     c.onmouseleave = () => { if (a !== S.sel && a !== S.pin) a.poly.setStyle({weight:0.6, color:tok.panel}); }; });
   const ar = Math.abs(r), strength = ar >= 0.7 ? "strong" : ar >= 0.45 ? "moderate" : ar >= 0.2 ? "weak" : "no clear";
   const dir = r > 0 ? "rises" : "falls";
@@ -457,12 +558,43 @@ function drawScatter() {
     : `There is a <b>${strength} ${r > 0 ? "positive" : "negative"}</b> link (r = ${r.toFixed(2)}): where ${esc(lc(X.label))} is higher, ${esc(lc(Y.label))} usually ${dir}. Dots are sized by population; tap one to open it. Correlation between areas does not show that one causes the other.`;
 }
 function renderRanks() {
+  if ($("rankList")) return renderRankList();
   const M = MEASURES[S.measure];
   const v = D.das.filter(a => a[S.measure] != null && (a.pop || 0) >= 40).sort((a, b) => b[S.measure] - a[S.measure]);
   const li = a => `<li><button data-i="${a.i}" title="${esc(a.name)}"><span>${esc(a.name)}</span><b>${M.long(a[S.measure])}</b></button></li>`;
   $("rankNote").textContent = lc(M.label);
   $("ranks").innerHTML = `<div><h3>Highest</h3><ol>${v.slice(0, 5).map(li).join("")}</ol></div><div><h3>Lowest</h3><ol>${v.slice(-5).reverse().map(li).join("")}</ol></div>`;
   $("ranks").querySelectorAll("button").forEach(b => b.onclick = () => select(D.das[+b.dataset.i], {zoom:true}));
+}
+
+// Every neighbourhood ranked on the mapped measure, with a bar for its value and the chosen one highlighted.
+function renderRankList() {
+  const M = MEASURES[S.measure], asc = !!S.asc;
+  const v = D.das.filter(a => a[S.measure] != null).sort((a, b) => asc ? a[S.measure] - b[S.measure] : b[S.measure] - a[S.measure]);
+  const lo = Math.min(...v.map(a => a[S.measure])), hi = Math.max(...v.map(a => a[S.measure])), [ca, cb] = selCols();
+  $("rankNote").textContent = lc(M.label);
+  $("rankSort").textContent = asc ? "Lowest first" : "Highest first";
+  $("rankList").innerHTML = v.map((a, i) => { const w = hi > lo ? 6 + 94 * (a[S.measure] - lo) / (hi - lo) : 50;
+    const [A, B] = AB(), tag = a === A ? "A" : a === B ? "B" : "", col = tag === "A" ? ca : tag === "B" ? cb : "";
+    return `<li${tag ? ` class="hl" style="--hl:${col}"` : ""}><button data-i="${a.i}"><span class="rk">${i + 1}</span><span class="nm">${tag ? `<b class="tg">${tag}</b>` : ""}${esc(a.name)}</span><span class="vl">${M.long(a[S.measure])}</span><span class="br"><i style="width:${w.toFixed(1)}%;background:${colorOf(a)}"></i></span></button></li>`; }).join("");
+  $("rankList").querySelectorAll("button").forEach(b => b.onclick = () => select(D.das[+b.dataset.i], {zoom:true}));
+}
+function downloadCSV(name, rows) {
+  const q = x => { const t = x == null ? "" : String(x); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const blob = new Blob(["\ufeff" + rows.map(r => r.map(q).join(",")).join("\r\n")], {type:"text/csv"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+// Comparison: the two chosen neighbourhoods (or the one) beside the city, every measure. Rankings: every neighbourhood, every measure.
+function exportCompare() {
+  const [a, b] = AB(); if (!a) return;
+  const rows = [["Measure", "A: " + a.name + " (DA " + a.da + ")"].concat(b ? ["B: " + b.name + " (DA " + b.da + ")"] : []).concat(["City of Guelph"])];
+  for (const k of KEYS) rows.push([MEASURES[k].label, a[k]].concat(b ? [b[k]] : []).concat([D.city[k]]));
+  downloadCSV("guelph-census-compare.csv", rows);
+}
+function exportAll() {
+  const rows = [["DA", "Neighbourhood"].concat(KEYS.map(k => MEASURES[k].label))];
+  for (const a of D.das) rows.push([a.da, a.name].concat(KEYS.map(k => a[k])));
+  downloadCSV("guelph-census-neighbourhoods.csv", rows);
 }
 
 boot().catch(e => { $("loading").textContent = "The census data didn't load. Check that the data folder sits next to this page, then reload."; console.error(e); });

@@ -10,6 +10,10 @@ Explore the 2021 Census across Guelph's 201 neighbourhoods (Statistics Canada di
 - **Find any address or street.** Search all 55,873 Guelph civic addresses: the app marks the address and opens its neighbourhood. Each neighbourhood is named after the two streets with the most length inside it.
 - **City boundary** drawn from the City of Guelph's official boundary, with the area outside it faded.
 - **Rotated to Guelph's grid.** The map is turned 46° clockwise so the city's street grid runs up and down and the city reads tall, with the Eramosa River heading to the upper right. A north arrow shows true north. The rotation is built into the map projection (`ROT_DEG` in `scripts/app.js`; negative turns clockwise), so clicks, search and zoom-to-fit all follow it.
+- **Grayscale basemap.** Inside the city, the City of Guelph property parcels draw the blocks and rights-of-way (road, laneway and walkway parcels), and the rights-of-way show softly over the census colours. Outside the city, OpenStreetMap streets, buildings and water reach about 3 km past the limits. Built by `scripts/build_basemap.py` into `data/basemap.json`.
+- **Zoom and pan limits.** The opening view (the whole city) is the furthest you can zoom out; you can zoom in and pan, and panning stops a little past the city limits.
+- **Phone layout: Explore and Analyze.** Explore is for the public: search, measure chips and a plain-language card for the chosen neighbourhood. Analyze is for staff: compare two neighbourhoods (A and B), a full ranked list, how two measures relate, and CSV export.
+- **Selection colours** complement each colour ramp (orange on blue, violet on amber, magenta on green) over a white edge.
 - **Streets and buildings for context.** Main roads show at every zoom, collector and local streets fade in as you zoom, and street names follow the streets. All 38,908 building footprints appear from about zoom 14.5.
 
 ## Desktop and phone versions
