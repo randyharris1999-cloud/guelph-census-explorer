@@ -397,11 +397,8 @@ async function loadBasemap() {
 // Under the census layer: blocks, rights-of-way and rail inside the city; streets, water and buildings outside it.
 function drawBaseUnder(ctx, v) {
   const z = v.z;
-  ctx.fillStyle = tok.block; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 0, true); ctx.fill("evenodd");
-  ctx.fillStyle = tok.rail; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 2, true); ctx.fill("evenodd");
-  ctx.fillStyle = tok.row; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 1, true); ctx.fill("evenodd");
-  if (z >= 15.5) { ctx.strokeStyle = tok["road-case"]; ctx.lineWidth = 0.5; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 0, true); ctx.stroke(); }
-  ctx.fillStyle = tok.water; ctx.beginPath(); tracePack(ctx, v, BASE.water, null, true); ctx.fill("evenodd");
+  // Inside the city the census colours cover this layer, so the parcels are drawn only over it (drawBaseOver).
+  ctx.fillStyle = tok.water; ctx.beginPath(); tracePack(ctx, v, BASE.water, null, true); ctx.fill();
   ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.strokeStyle = tok.stream;
   for (const c of [0, 1]) { ctx.lineWidth = c ? (z < 13 ? 1.6 : 3) : (z < 13.5 ? 0 : 1); if (!ctx.lineWidth) continue; ctx.beginPath(); tracePack(ctx, v, BASE.streams, c, false); ctx.stroke(); }
@@ -414,14 +411,16 @@ function drawBaseUnder(ctx, v) {
     else { ctx.strokeStyle = tok["road-out"]; ctx.lineWidth = w; }
     ctx.beginPath(); tracePack(ctx, v, BASE.roads, c, false); ctx.stroke();
   }
-  if (z >= 13.5) { ctx.globalAlpha = Math.min(1, (z - 13.5) / 0.75 + 0.3); ctx.fillStyle = tok["bldg-out"]; ctx.beginPath(); tracePack(ctx, v, BASE.bldg, null, true); ctx.fill(); ctx.globalAlpha = 1; }
+  if (z >= 14.5) { ctx.globalAlpha = Math.min(1, (z - 14.5) / 0.5 + 0.4); ctx.fillStyle = tok["bldg-out"]; ctx.beginPath(); tracePack(ctx, v, BASE.bldg, null, true); ctx.fill(); ctx.globalAlpha = 1; }
 }
 // Over the census layer: rights-of-way, softly, so the street grid and the blocks read through the colours.
 function drawBaseOver(ctx, v) {
   if (v.z < 12) return;
   ctx.globalAlpha = Math.min(1, (v.z - 12) / 1.25);
-  ctx.fillStyle = tok["row-over"]; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 1, true); ctx.fill("evenodd");
+  ctx.fillStyle = tok["row-over"]; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 1, true); ctx.fill();
   ctx.globalAlpha = 1;
+  // lot lines once you're in close (only the lots on screen are drawn)
+  if (v.z >= 16) { ctx.strokeStyle = tok["row-over"]; ctx.lineWidth = 0.8; ctx.beginPath(); tracePack(ctx, v, BASE.parcels, 0, true); ctx.stroke(); }
 }
 async function loadContext() {
   try {
@@ -450,7 +449,7 @@ async function loadContext() {
   } catch (e) { console.error(e); }
 }
 function drawBuildings(ctx, v, off, bx, by, box) {
-  if (v.z < 14.5) return;
+  if (v.z < 15) return;
   const n = off.length - 1, X0 = v.ox / v.k, Y0 = v.oy / v.k, X1 = (v.ox + v.w) / v.k, Y1 = (v.oy + v.h) / v.k;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
@@ -458,7 +457,7 @@ function drawBuildings(ctx, v, off, bx, by, box) {
     for (let j = off[i]; j < off[i + 1]; j++) { const x = bx[j] * v.k - v.ox, y = by[j] * v.k - v.oy; if (j === off[i]) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
     ctx.closePath();
   }
-  ctx.globalAlpha = Math.min(1, (v.z - 14.5) / 0.75 + 0.25);
+  ctx.globalAlpha = Math.min(1, (v.z - 15) / 0.5 + 0.4);
   ctx.fillStyle = tok.bldg; ctx.fill();
   if (v.z >= 15.5) { ctx.strokeStyle = tok["bldg-edge"]; ctx.lineWidth = 0.7; ctx.stroke(); }
 }
@@ -532,7 +531,8 @@ const CanvasLayer = L.Layer.extend({
   initialize(draw, pane) { this._draw = draw; L.setOptions(this, {pane}); },
   onAdd(m) { this._c = L.DomUtil.create("canvas", "leaflet-zoom-hide"); this._c.style.pointerEvents = "none"; m.getPane(this.options.pane).appendChild(this._c); m.on("moveend zoomend resize viewreset", this.redraw, this); this.redraw(); },
   onRemove(m) { this._c.remove(); m.off("moveend zoomend resize viewreset", this.redraw, this); },
-  redraw() {
+  redraw() { if (this._raf) return; this._raf = requestAnimationFrame(() => { this._raf = 0; this._paint(); }); },
+  _paint() {
     const m = this._map; if (!m) return;
     const s = m.getSize(), dpr = window.devicePixelRatio || 1, c = this._c, tl = m.containerPointToLayerPoint([0, 0]);
     c.width = s.x * dpr; c.height = s.y * dpr; c.style.width = s.x + "px"; c.style.height = s.y + "px"; L.DomUtil.setPosition(c, tl);
