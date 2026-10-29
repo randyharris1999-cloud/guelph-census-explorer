@@ -370,7 +370,7 @@ function packRings(list, pick) {
   return {x, y, roff, ioff, box, cls, n:list.length};
 }
 function tracePack(ctx, v, G, want, close) {
-  const X0 = v.ox / v.k - 2, Y0 = v.oy / v.k - 2, X1 = (v.ox + v.w) / v.k + 2, Y1 = (v.oy + v.h) / v.k + 2;
+  const m = 40 / v.k, X0 = v.ox / v.k - m, Y0 = v.oy / v.k - m, X1 = (v.ox + v.w) / v.k + m, Y1 = (v.oy + v.h) / v.k + m;   // 40-pixel margin around the screen
   for (let i = 0; i < G.n; i++) {
     if (want != null && G.cls[i] !== want) continue;
     if (G.box[i * 4 + 2] < X0 || G.box[i * 4] > X1 || G.box[i * 4 + 3] < Y0 || G.box[i * 4 + 1] > Y1) continue;
