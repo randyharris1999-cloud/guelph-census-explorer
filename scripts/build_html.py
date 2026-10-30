@@ -6,7 +6,7 @@ import os
 here = os.path.dirname(os.path.abspath(__file__)); root = os.path.join(here, "..")
 rd = lambda f: open(os.path.join(here, f), encoding="utf-8").read()
 css, js = rd("leaflet.css"), rd("app.js")
-HEAD = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+HEAD = ('<!doctype html>\n<!-- Guelph Census Explorer. © 2026 Randy Harris. All rights reserved. Not open source: no copying, modification or redistribution without written permission. -->\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n'
         '<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>\n')
 for src, out, art in [("desktop.src.html", "index.html", "artifact-desktop.html"), ("mobile.src.html", "mobile.html", "artifact-mobile.html")]:

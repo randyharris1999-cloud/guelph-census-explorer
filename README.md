@@ -75,4 +75,12 @@ Notes:
 - The app maps the 201 DAs that contain Guelph address points. The 19 others are mostly rural edges outside the city's address data.
 - Values Statistics Canada suppressed for privacy appear as "Not reported".
 
-An independent project built on open data. Not an official City of Guelph service. Created by Randy Harris.
+An independent project built on open data. Not an official City of Guelph service.
+
+## Copyright
+
+© 2026 Randy Harris. All rights reserved.
+
+The code, design and layout of Guelph Census Explorer are not open source. You're welcome to use the app and to view this repository on GitHub, but you may not copy, modify, redistribute or republish the code or design, in whole or in part, without written permission. See [LICENSE](LICENSE).
+
+The data the app displays stays under its own licences: Statistics Canada Open Licence (2021 Census); City of Guelph Open Government Licence; © OpenStreetMap contributors (ODbL).
